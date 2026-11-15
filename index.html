@@ -523,20 +523,21 @@
   html.hero-cinema body{ overflow-x: clip; }
   html.hero-cinema .hero-story{
     height:360vh;
-    height: calc(var(--hero-vvh, 100dvh) * 3.6);
+    height:360lvh;
     overflow: visible;
   }
   html.hero-cinema .hero-stage{
     position:-webkit-sticky;
     position:sticky;
     top:0;
-    height:100dvh;
-    height: var(--hero-vvh, 100dvh);
+    height:100vh;
+    height:100lvh;
     min-height:0;
     overflow:hidden;
   }
   html.hero-cinema .hero-copy{
-    height:100%;
+    height:100vh;
+    height:100svh;
     display:flex;
     flex-direction:column;
     justify-content:flex-start;
@@ -657,6 +658,16 @@
 
   @media (max-width: 900px){
     .hero .container.hero-copy{ grid-template-columns:none; }
+  }
+
+  /* mobile smoothness: no live blur over the moving film, GPU canvas */
+  html.hero-cinema .hero-canvas{ transform:translateZ(0); }
+  @media (max-width: 820px), (hover: none){
+    header.scrolled{ backdrop-filter:none; -webkit-backdrop-filter:none; background:rgba(255,255,255,.96); }
+    .hero .hero-copy .btn-ghost,
+    .hero-chip{ backdrop-filter:none; -webkit-backdrop-filter:none; background:rgba(26,18,32,.38); }
+    .hero .hw{ will-change:auto; }
+    .hero .hero-copy h1{ text-shadow: 0 2px 10px rgba(18,10,22,.45); }
   }
 
 </style>
@@ -963,7 +974,7 @@
   const header = document.getElementById('siteHeader');
   window.addEventListener('scroll', () => {
     header.classList.toggle('scrolled', window.scrollY > 30);
-  });
+  }, { passive: true });
 
   const reveals = document.querySelectorAll('[data-reveal]');
   const io = new IntersectionObserver((entries) => {
@@ -1279,20 +1290,24 @@
     const hWords = wrapWords(headline);
     const lWords = wrapWords(lead);
 
+    const noBlur = window.matchMedia('(max-width: 820px), (hover: none)').matches;
     function paintReveal(el, t){
       if (!el) return;
-      const o = clamp01(t);
-      const blur = (1 - o) * 14;
+      const o = Math.round(clamp01(t) * 100) / 100;
+      if (el._hp === o) return; // skip redundant style writes
+      el._hp = o;
       const y = (1 - o) * 10;
       el.style.opacity = String(o);
-      el.style.filter = o > 0.98 ? 'none' : ('blur(' + blur.toFixed(2) + 'px)');
-      el.style.transform = y < 0.2 ? 'none' : ('translateY(' + y.toFixed(2) + 'px)');
+      if (!noBlur){
+        el.style.filter = o > 0.98 ? 'none' : ('blur(' + ((1 - o) * 14).toFixed(2) + 'px)');
+      }
+      el.style.transform = y < 0.2 ? 'none' : ('translate3d(0,' + y.toFixed(2) + 'px,0)');
     }
     function paintWords(list, t){
       const n = list.length || 1;
       list.forEach((el, i) => {
-        const start = i / n;
-        const span = Math.max(0.12, 1.15 / n);
+        const span = Math.min(1, Math.max(0.12, 1.15 / n));
+        const start = (n > 1 ? i / (n - 1) : 0) * (1 - span); // last word fully lands at t=1
         paintReveal(el, (t - start) / span);
       });
     }
@@ -1320,68 +1335,106 @@
     }
 
     const ctx = canvas.getContext('2d', { alpha: false });
-    const FRAME_COUNT = 31;
+    const stage = hero.querySelector('.hero-stage') || canvas.parentNode;
+    const isMobile = window.matchMedia('(max-width: 820px)').matches;
+    const FRAME_BASE = '';
+    // Mobile: 61 portrait frames (WebP, JPEG fallback). Desktop: 31 landscape frames.
+    const FRAME_COUNT = isMobile ? 61 : 31;
     const frames = new Array(FRAME_COUNT);
-    let ready = false;
-    let raf = 0;
-    let lastP = -1;
-    let lastIdx = -1;
+    let raf = 0, lastT = 0;
+    let cur = 0, target = 0;
+    let lastDrawKey = -1, lastUIP = -1, needsDraw = true;
+    let storyTop = 0, run = 1, layoutW = 0;
+    let cover = null;
 
-    function frameUrl(i){
+    function frameUrls(i){
+      if (isMobile){
+        const n = String(i + 1).padStart(3, '0');
+        return [FRAME_BASE + 'm-' + n + '.webp', FRAME_BASE + 'm-' + n + '.jpg'];
+      }
       const n = String(i + 1).padStart(2, '0');
-      const mobile = window.matchMedia('(max-width: 820px)').matches;
-      return '' + (mobile ? 'f-m-' : 'f-') + n + '.jpg';
+      return [FRAME_BASE + 'f-' + n + '.jpg'];
     }
-    function viewH(){
-      return (window.visualViewport && window.visualViewport.height) || window.innerHeight || document.documentElement.clientHeight;
-    }
-    function setVVH(){
-      html.style.setProperty('--hero-vvh', viewH() + 'px');
+    function stageH(){ return stage.clientHeight || window.innerHeight; }
+    // Cache layout once (no layout reads while scrolling).
+    function measure(){
+      const r = story.getBoundingClientRect();
+      storyTop = r.top + (window.scrollY || window.pageYOffset || 0);
+      run = Math.max(1, story.offsetHeight - stageH());
+      layoutW = window.innerWidth;
     }
     function resizeCanvas(){
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      const w = canvas.clientWidth || window.innerWidth;
-      const h = canvas.clientHeight || viewH();
+      // Mobile frames are 720px tall, so a 1x canvas already shows every source pixel (and is ~4x cheaper than 2x).
+      const dpr = Math.min(window.devicePixelRatio || 1, isMobile ? 1 : 2);
+      const w = stage.clientWidth || window.innerWidth;
+      const h = stageH();
       const tw = Math.round(w * dpr), th = Math.round(h * dpr);
       if (canvas.width !== tw || canvas.height !== th){
         canvas.width = tw;
         canvas.height = th;
-        lastIdx = -1;
+        cover = null;
+        needsDraw = true;
       }
     }
-    function coverDraw(source){
-      if (!source) return;
-      const cw = canvas.width, ch = canvas.height;
-      const vw = source.naturalWidth || source.videoWidth || source.width;
-      const vh = source.naturalHeight || source.videoHeight || source.height;
-      if (!vw || !vh || !cw || !ch) return;
-      const scale = Math.max(cw / vw, ch / vh);
-      const dw = vw * scale, dh = vh * scale;
-      const dx = (cw - dw) / 2, dy = (ch - dh) / 2;
-      ctx.drawImage(source, dx, dy, dw, dh);
+    function srcSize(src){
+      return [src.naturalWidth || src.width, src.naturalHeight || src.height];
+    }
+    function drawCover(src, alpha){
+      if (!src) return;
+      if (!cover){
+        const [vw, vh] = srcSize(src);
+        const cw = canvas.width, ch = canvas.height;
+        if (!vw || !vh || !cw || !ch) return;
+        const sc = Math.max(cw / vw, ch / vh);
+        const dw = vw * sc, dh = vh * sc;
+        cover = [(cw - dw) / 2, (ch - dh) / 2, dw, dh];
+      }
+      ctx.globalAlpha = alpha;
+      ctx.drawImage(src, cover[0], cover[1], cover[2], cover[3]);
+    }
+    function nearest(i){
+      if (frames[i]) return frames[i];
+      for (let d = 1; d < FRAME_COUNT; d++){
+        if (i - d >= 0 && frames[i - d]) return frames[i - d];
+        if (i + d < FRAME_COUNT && frames[i + d]) return frames[i + d];
+      }
+      return null;
+    }
+    // Draw a fractional frame: base frame + crossfade into the next one.
+    function drawAt(f){
+      const i0 = Math.min(FRAME_COUNT - 1, Math.floor(f));
+      const t = f - i0;
+      const a = nearest(i0);
+      if (!a) return false;
+      drawCover(a, 1);
+      const b = frames[Math.min(FRAME_COUNT - 1, i0 + 1)];
+      if (t > 0.02 && b && b !== a) drawCover(b, t);
+      ctx.globalAlpha = 1;
+      return true;
     }
     function getP(){
-      const run = story.offsetHeight - viewH();
-      if (run <= 0) return 0;
-      return clamp01(-story.getBoundingClientRect().top / run);
-    }
-    function frameIndex(p){
-      return Math.min(FRAME_COUNT - 1, Math.max(0, Math.round(p * (FRAME_COUNT - 1))));
+      return clamp01(((window.scrollY || window.pageYOffset || 0) - storyTop) / run);
     }
 
-    function tick(){
+    function tick(now){
       raf = 0;
-      resizeCanvas();
-      const p = getP();
-      const idx = frameIndex(p);
-      if (frames[idx] && (idx !== lastIdx || lastP < 0)){
-        coverDraw(frames[idx]);
-        lastIdx = idx;
+      target = getP();
+      const dt = lastT ? Math.min(64, Math.max(1, now - lastT)) : 16.67;
+      lastT = now;
+      const diff = target - cur;
+      if (Math.abs(diff) < 0.0005) cur = target;
+      else cur += diff * (1 - Math.pow(1 - 0.2, dt / 16.67)); // smooth, frame-rate independent easing
+      const f = cur * (FRAME_COUNT - 1);
+      const key = Math.round(f * 32);
+      if (needsDraw || key !== lastDrawKey){
+        if (drawAt(f)){ lastDrawKey = key; needsDraw = false; }
       }
-      if (Math.abs(p - lastP) > 0.001){
-        applyUI(p);
-        lastP = p;
+      if (Math.abs(cur - lastUIP) > 0.001 || (cur === target && cur !== lastUIP)){
+        applyUI(cur);
+        lastUIP = cur;
       }
+      if (cur !== target) requestTick();
+      else lastT = 0;
     }
     function requestTick(){
       if (!raf) raf = requestAnimationFrame(tick);
@@ -1395,37 +1448,57 @@
     io.observe(story);
 
     window.addEventListener('scroll', () => { if (visible) requestTick(); }, { passive: true });
-    window.addEventListener('touchmove', () => { if (visible) requestTick(); }, { passive: true });
-    window.addEventListener('resize', () => { setVVH(); resizeCanvas(); lastIdx = -1; requestTick(); }, { passive: true });
-    if (window.visualViewport){
-      window.visualViewport.addEventListener('resize', () => { setVVH(); resizeCanvas(); lastIdx = -1; requestTick(); });
-      window.visualViewport.addEventListener('scroll', () => { if (visible) requestTick(); }, { passive: true });
-    }
+    // Ignore height-only resizes (iOS toolbar show/hide); only re-layout when width/orientation changes.
+    window.addEventListener('resize', () => {
+      if (window.innerWidth === layoutW) return;
+      measure(); resizeCanvas(); needsDraw = true; requestTick();
+    }, { passive: true });
+    window.addEventListener('orientationchange', () => {
+      setTimeout(() => { measure(); resizeCanvas(); needsDraw = true; requestTick(); }, 250);
+    });
+    window.addEventListener('load', () => { measure(); requestTick(); });
 
-    setVVH();
+    measure();
     resizeCanvas();
     applyUI(0);
     if (headerEl) headerEl.classList.add('hero-on-film');
 
-    // Load an image sequence (more reliable for scroll-scrub than video.currentTime).
-    // hero.mp4 stays in assets/ for upload, but is not requested unless a later enhancement uses it.
-    let settled = 0;
-    for (let i = 0; i < FRAME_COUNT; i++){
-      const img = new Image();
-      img.decoding = 'async';
-      img.onload = img.onerror = () => {
-        settled++;
-        frames[i] = img;
-        if (i === 0){
-          ready = true;
-          html.classList.add('hero-video-ready');
-          coverDraw(img);
-          requestTick();
-        }
-        if (settled === FRAME_COUNT) requestTick();
-      };
-      img.src = frameUrl(i);
+    // Preload + fully decode every frame up front so scrubbing never waits on a decode.
+    function decodeImg(url){
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.decoding = 'async';
+        img.onload = () => {
+          const done = () => resolve(img);
+          if (img.decode) img.decode().then(done, done); else done();
+        };
+        img.onerror = reject;
+        img.src = url;
+      });
     }
+    function toBitmap(img){
+      if (window.createImageBitmap){
+        return createImageBitmap(img).catch(() => img);
+      }
+      return Promise.resolve(img);
+    }
+    function loadFrame(i){
+      const urls = frameUrls(i);
+      let pr = decodeImg(urls[0]);
+      for (let k = 1; k < urls.length; k++) pr = pr.catch(() => decodeImg(urls[k]));
+      return pr.then(toBitmap).then(src => {
+        frames[i] = src;
+        if (i === 0) html.classList.add('hero-video-ready');
+        needsDraw = true;
+        requestTick();
+      }).catch(() => {});
+    }
+    // First frame first, then the rest in a few parallel lanes (keeps the main thread calm).
+    loadFrame(0).then(() => {
+      let next = 1;
+      const lane = () => next < FRAME_COUNT ? loadFrame(next++).then(lane) : null;
+      for (let l = 0; l < 6; l++) lane();
+    });
   })();
 
 </script>
