@@ -519,11 +519,21 @@
   .hero .hero-copy .stat-link:hover b{ color:var(--lamp); }
 
   /* cinema: tall scroll + sticky stage */
-  html.hero-cinema .hero-story{ height:360vh; }
+  html.hero-cinema,
+  html.hero-cinema body{ overflow-x: clip; }
+  html.hero-cinema .hero-story{
+    height:360vh;
+    height: calc(var(--hero-vvh, 100dvh) * 3.6);
+    overflow: visible;
+  }
   html.hero-cinema .hero-stage{
-    position:sticky; top:0;
+    position:-webkit-sticky;
+    position:sticky;
+    top:0;
     height:100dvh;
-    min-height:100vh;
+    height: var(--hero-vvh, 100dvh);
+    min-height:0;
+    overflow:hidden;
   }
   html.hero-cinema .hero-copy{
     height:100%;
@@ -547,7 +557,7 @@
   html.hero-cinema .hero-copy .lead .hw{ opacity:0; }
   html.hero-cinema .hero h1 em{ white-space:nowrap; }
 
-  /* fallback / phones / reduced motion: short hero, still only */
+  /* fallback / reduced motion only: short hero, still only */
   html.hero-fallback .hero-story{ height:auto; }
   html.hero-fallback .hero-stage{
     min-height:100dvh;
@@ -595,7 +605,18 @@
   }
 
   @media (max-width: 820px){
-    .hero-stage, .hero, .hero-story{ overflow:hidden; max-width:100%; }
+    .hero, .hero-story{ overflow: visible; max-width:100%; }
+    .hero-stage{ overflow:hidden; max-width:100%; }
+    .hero-still-start{ object-position: 62% 42%; }
+    html.hero-cinema .hero-scrim{
+      background: linear-gradient(180deg, rgba(18,10,22,.55) 0%, rgba(18,10,22,.16) 26%, rgba(18,10,22,.22) 52%, rgba(18,10,22,.82) 100%);
+    }
+    html.hero-cinema .hero-copy{
+      padding-top:108px;
+      padding-bottom:28px;
+    }
+    html.hero-cinema .hero-chip{ display:none; }
+    html.hero-cinema .hero-hint{ bottom:14px; font-size:12px; letter-spacing:.08em; }
     .hero .container.hero-copy{
       padding-inline: 22px;
       max-width:100%;
@@ -644,11 +665,7 @@
   (function(){
     try{
       var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-      var narrow = window.matchMedia('(max-width: 820px)').matches;
-      var c = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
-      var slow = !!(c && (c.saveData || /2g/i.test(c.effectiveType || '')));
-      var cinema = !reduce && !narrow && !slow;
-      document.documentElement.classList.add(cinema ? 'hero-cinema' : 'hero-fallback');
+      document.documentElement.classList.add(reduce ? 'hero-fallback' : 'hero-cinema');
       if (reduce) document.documentElement.classList.add('hero-reduced');
     }catch(e){
       document.documentElement.classList.add('hero-fallback');
@@ -983,6 +1000,18 @@
     return rows.filter(r => r.some(c => c.trim() !== ''));
   }
 
+
+  function formatFollowerCount(raw){
+    const s = String(raw || '').trim();
+    if (!s) return s;
+    if (/[kکK]|هزار/i.test(s)) return s;
+    const latin = s.replace(/[۰-۹]/g, d => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
+                   .replace(/[٫]/g, '.').replace(/[٬،]/g, '');
+    const n = parseFloat(latin);
+    if (!isNaN(n) && n > 0 && n < 1000) return s + 'K';
+    return s;
+  }
+
   // ---------- Live Instagram stats from a Google Sheet ----------
   // Sheet tab must have headers "followers" and "posts" in row 1, values in row 2
   // Share > General access > "Anyone with the link" > Viewer
@@ -1008,7 +1037,7 @@
         const followersIdx = headers.indexOf('followers');
         const postsIdx = headers.indexOf('posts');
         if (followersIdx > -1 && values[followersIdx]) {
-          document.getElementById('statFollowers').textContent = values[followersIdx].trim();
+          document.getElementById('statFollowers').textContent = formatFollowerCount(values[followersIdx].trim());
         }
         if (postsIdx > -1 && values[postsIdx]) {
           document.getElementById('statPosts').textContent = values[postsIdx].trim();
@@ -1195,15 +1224,10 @@
     const html = document.documentElement;
 
     const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    const narrowMQ = window.matchMedia('(max-width: 820px)');
-    const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
-    const slow = !!(conn && (conn.saveData || /2g/i.test(conn.effectiveType || '')));
-    const cinematic = html.classList.contains('hero-cinema') && !reduce && !narrowMQ.matches && !slow && video && video.getAttribute('data-src');
 
-    if (!cinematic) {
+    if (reduce) {
       html.classList.remove('hero-cinema');
-      html.classList.add('hero-fallback');
-      if (reduce) html.classList.add('hero-reduced');
+      html.classList.add('hero-fallback', 'hero-reduced');
       const topFilm = () => {
         if (!headerEl) return;
         headerEl.classList.toggle('hero-on-film', window.scrollY < 36);
@@ -1212,6 +1236,8 @@
       window.addEventListener('scroll', topFilm, { passive: true });
       return;
     }
+    html.classList.remove('hero-fallback');
+    html.classList.add('hero-cinema');
 
     const clamp01 = t => Math.min(1, Math.max(0, t));
     const range = (p, a, b) => (b === a ? 1 : clamp01((p - a) / (b - a)));
@@ -1302,12 +1328,20 @@
     let lastIdx = -1;
 
     function frameUrl(i){
-      return 'f-' + String(i + 1).padStart(2, '0') + '.jpg';
+      const n = String(i + 1).padStart(2, '0');
+      const mobile = window.matchMedia('(max-width: 820px)').matches;
+      return '' + (mobile ? 'f-m-' : 'f-') + n + '.jpg';
+    }
+    function viewH(){
+      return (window.visualViewport && window.visualViewport.height) || window.innerHeight || document.documentElement.clientHeight;
+    }
+    function setVVH(){
+      html.style.setProperty('--hero-vvh', viewH() + 'px');
     }
     function resizeCanvas(){
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const w = canvas.clientWidth || window.innerWidth;
-      const h = canvas.clientHeight || window.innerHeight;
+      const h = canvas.clientHeight || viewH();
       const tw = Math.round(w * dpr), th = Math.round(h * dpr);
       if (canvas.width !== tw || canvas.height !== th){
         canvas.width = tw;
@@ -1327,7 +1361,7 @@
       ctx.drawImage(source, dx, dy, dw, dh);
     }
     function getP(){
-      const run = story.offsetHeight - window.innerHeight;
+      const run = story.offsetHeight - viewH();
       if (run <= 0) return 0;
       return clamp01(-story.getBoundingClientRect().top / run);
     }
@@ -1361,14 +1395,14 @@
     io.observe(story);
 
     window.addEventListener('scroll', () => { if (visible) requestTick(); }, { passive: true });
-    window.addEventListener('resize', () => { resizeCanvas(); lastIdx = -1; requestTick(); }, { passive: true });
-    narrowMQ.addEventListener('change', (e) => {
-      if (e.matches){
-        html.classList.remove('hero-cinema', 'hero-video-ready');
-        html.classList.add('hero-fallback');
-      }
-    });
+    window.addEventListener('touchmove', () => { if (visible) requestTick(); }, { passive: true });
+    window.addEventListener('resize', () => { setVVH(); resizeCanvas(); lastIdx = -1; requestTick(); }, { passive: true });
+    if (window.visualViewport){
+      window.visualViewport.addEventListener('resize', () => { setVVH(); resizeCanvas(); lastIdx = -1; requestTick(); });
+      window.visualViewport.addEventListener('scroll', () => { if (visible) requestTick(); }, { passive: true });
+    }
 
+    setVVH();
     resizeCanvas();
     applyUI(0);
     if (headerEl) headerEl.classList.add('hero-on-film');
