@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="color-scheme" content="light only">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' https://docs.google.com https://*.googleusercontent.com; media-src 'self' blob: data:; object-src 'none'; base-uri 'self'; form-action 'none'; upgrade-insecure-requests">
+<meta name="referrer" content="strict-origin-when-cross-origin">
 <title>خرید عروسک ریبورن دست‌ساز افسانه | Afsaneh Reborn Doll</title>
 <meta name="description" content="خرید عروسک ریبورن دست‌ساز و سیلیکونی از اتلیه‌ی افسانه؛ عروسک ریبورن واقعی با جزئیات ظریف دست‌ساز و ارسال به ایران و ترکیه. Reborn Doll اورجینال و باکیفیت.">
 <link rel="canonical" href="https://afsanehreborn.com/">
@@ -1124,6 +1126,15 @@
     return ['sold', 'sold out', 'ناموجود', 'فروخته شد'].includes(s);
   }
 
+  // ---------- safety helpers: Sheet text is shown as plain text, image links must be https ----------
+  function esc(v) {
+    return String(v == null ? '' : v).replace(/[&<>"'`]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;'}[ch]));
+  }
+  function safeImg(u) {
+    try { const x = new URL(String(u || '').trim(), location.href); return x.protocol === 'https:' ? x.href : ''; }
+    catch (e) { return ''; }
+  }
+
   let PRODUCTS = [];
 
   function renderProductCards() {
@@ -1135,13 +1146,13 @@
       const shortDesc = p.description ? (p.description.length > 90 ? p.description.slice(0, 90) + '…' : p.description) : '';
       card.innerHTML = `
         <div class="card-visual">
-          <img src="${p.image1}" alt="${p.name || p.category || 'عروسک ریبورن'}" loading="lazy">
+          <img src="${esc(safeImg(p.image1))}" alt="${esc(p.name || p.category || 'عروسک ریبورن')}" loading="lazy">
           <div class="wrap-fold"></div>
         </div>
         <div class="card-body">
-          ${p.category ? `<div class="tag">${p.category}${p.featured ? '<span class="badge badge-featured">ویژه</span>' : ''}${p.sold ? '<span class="badge badge-sold">ناموجود</span>' : ''}</div>` : ''}
-          ${shortDesc ? `<p>${shortDesc}</p>` : ''}
-          <div class="row"><span class="price">${p.price ? p.price : 'قیمت در دایرکت'}</span><a class="link" href="#" data-idx="${idx}">مشاهده</a></div>
+          ${p.category ? `<div class="tag">${esc(p.category)}${p.featured ? '<span class="badge badge-featured">ویژه</span>' : ''}${p.sold ? '<span class="badge badge-sold">ناموجود</span>' : ''}</div>` : ''}
+          ${shortDesc ? `<p>${esc(shortDesc)}</p>` : ''}
+          <div class="row"><span class="price">${esc(p.price ? p.price : 'قیمت در دایرکت')}</span><a class="link" href="#" data-idx="${idx}">مشاهده</a></div>
         </div>`;
       card.querySelector('.card-visual').addEventListener('click', () => openProductModal(idx));
       card.querySelector('.link').addEventListener('click', (e) => { e.preventDefault(); openProductModal(idx); });
@@ -1152,7 +1163,7 @@
   function openProductModal(idx) {
     const p = PRODUCTS[idx];
     if (!p) return;
-    const images = [p.image1, p.image2, p.image3].filter(Boolean);
+    const images = [p.image1, p.image2, p.image3].map(safeImg).filter(Boolean);
     document.getElementById('productModalImg').src = images[0] || '';
     document.getElementById('productModalImg').alt = p.name || '';
     document.getElementById('productModalTag').textContent = p.category || '';
@@ -1166,7 +1177,7 @@
       images.forEach((src, i) => {
         const btn = document.createElement('button');
         if (i === 0) btn.classList.add('active');
-        btn.innerHTML = `<img src="${src}" alt="">`;
+        const timg = document.createElement('img'); timg.src = src; timg.alt = ''; btn.appendChild(timg);
         btn.addEventListener('click', () => {
           document.getElementById('productModalImg').src = src;
           thumbsWrap.querySelectorAll('button').forEach(b => b.classList.remove('active'));
@@ -1184,10 +1195,10 @@
       ['متریال', p.material],
     ].filter(([, v]) => v);
     const specsWrap = document.getElementById('productModalSpecs');
-    specsWrap.innerHTML = specs.map(([label, v]) => `<div><b>${v}</b>${label}</div>`).join('');
+    specsWrap.innerHTML = specs.map(([label, v]) => `<div><b>${esc(v)}</b>${esc(label)}</div>`).join('');
 
     const includesWrap = document.getElementById('productModalIncludes');
-    includesWrap.innerHTML = p.includes ? `<b>شامل: </b>${p.includes}` : '';
+    includesWrap.innerHTML = p.includes ? `<b>شامل: </b>${esc(p.includes)}` : '';
 
     const actionsWrap = document.getElementById('productModalActions');
     const waText = encodeURIComponent(`سلام، درباره‌ی «${p.name || 'این عروسک'}» سوال داشتم.`);
@@ -1238,7 +1249,7 @@
             featured: truthy(get(r, 'featured')), sold: isSold(get(r, 'status')),
             order: parseFloat(get(r, 'order')), _rowIdx: i,
           }))
-          .filter(p => p.image1 && !isHidden(p.status));
+          .filter(p => safeImg(p.image1) && !isHidden(p.status));
 
         products.sort((a, b) => {
           if (a.featured !== b.featured) return a.featured ? -1 : 1;
